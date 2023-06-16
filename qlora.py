@@ -296,6 +296,7 @@ def get_accelerate_model(args, checkpoint_dir):
     max_positions = 2**13 # 8k
 
     if "pythia" in args.model_name_or_path or "gpt-neox" in args.model_args.model_name_or_path:
+        # model = BloomForCausalLM.from_pretrained(args.model_name_or_path)
         for each in model.gpt_neox.layers:
             each.attention.rotary_emb = RotaryEmbedding(each.attention.rotary_ndims, max_positions,10000)
             each.attention.bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
@@ -304,12 +305,12 @@ def get_accelerate_model(args, checkpoint_dir):
             each.attention = BPTAttentionWrapperWithRotary(each.attention)#, max_seqlen = max_positions)
 
     elif "bloom" in args.model_name_or_path:
-        model = BloomForCausalLM.from_pretrained(args.model_name_or_path)
+        # model = BloomForCausalLM.from_pretrained(args.model_name_or_path)
         for each in model.transformer.h:
             each.self_attention = BPTAttentionWrapperWithAlibi(each.self_attention, max_seqlen = max_positions)
 
     elif "opt" in args.model_name_or_path:
-        model = OPTForCausalLM.from_pretrained(args.model_name_or_path)
+        # model = OPTForCausalLM.from_pretrained(args.model_name_or_path)
         for each in model.model.decoder.layers:
             each.self_attn = BPTAttentionWrapper(each.self_attn, max_seqlen = max_positions)
         original_num_embeddings = model.model.decoder.embed_positions.num_embeddings - 2
@@ -674,7 +675,7 @@ def train():
         cache_dir=args.cache_dir,
         padding_side="right",
         use_fast=False, # Fast tokenizer giving issues.
-        # tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
+        tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
     )
     if tokenizer._pad_token is None:
         smart_tokenizer_and_embedding_resize(
