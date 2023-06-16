@@ -57,7 +57,8 @@ DEFAULT_PAD_TOKEN = "[PAD]"
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(
-        default="EleutherAI/pythia-12b"
+        # default="EleutherAI/pythia-12b"
+        default="EleutherAI/pythia-70m"
     )
     trust_remote_code: Optional[bool] = field(
         default=False,
@@ -299,7 +300,7 @@ def get_accelerate_model(args, checkpoint_dir):
             each.attention.bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
                         1, 1, max_positions, max_positions
                     )
-            each.attention = BPTAttentionWrapperWithRotary(each.attention, max_seqlen = max_positions)
+            each.attention = BPTAttentionWrapperWithRotary(each.attention)#, max_seqlen = max_positions)
 
     elif "bloom" in args.model_name_or_path:
         model = BloomForCausalLM.from_pretrained(args.model_name_or_path)
