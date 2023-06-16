@@ -209,19 +209,9 @@ def blockwise_compute_attn(query, key, value,
 
 def blockwise_compute_ffn(cell, inputs, chunk_size):
     inputs = torch.split(inputs, chunk_size, dim=-2)
-    num_q = len(inputs)
+    outputs = [ cell(inputs[i]) for i in range(len(inputs)) ]
+    return torch.concat(outputs, dim=-2)
 
-    def ffn(cell, _, hidden_states):
-        outputs = cell(hidden_states)
-        return outputs
-    
-    outputs = []
-    for i in range(num_q):
-        outputs.append(ffn(cell, None, inputs[i]))
-    
-    res = torch.concat(outputs, dim=-2)
-    # res = rearrange(res, 'n b c d -> b (n c) d')
-    return res
 
 import torch
 from functools import partial
