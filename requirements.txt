@@ -12,4 +12,4 @@ scipy
 pandas
 datasets
 evaluate
-
+tqdm
