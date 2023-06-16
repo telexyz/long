@@ -221,12 +221,12 @@ class GenerationArguments:
     length_penalty: Optional[float] = field(default=1.0)
     no_repeat_ngram_size: Optional[int] = field(default=0) 
 
-def find_all_linear_names(args, model):
-    cls = bnb.nn.Linear4bit if args.bits == 4 else (bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear)
-    print(">>> Linear class", cls)
+def find_all_linear_names(model):
     lora_module_names = set()
     for name, module in model.named_modules():
-        if isinstance(module, cls):
+        if isinstance(module, bnb.nn.Linear4bit) or \
+            isinstance(module, bnb.nn.Linear8bitLt) or \
+            isinstance(module, torch.nn.Linear):
             names = name.split('.')
             lora_module_names.add(names[0] if len(names) == 1 else names[-1])
     print(">>> LoRA modules", lora_module_names)
@@ -295,7 +295,7 @@ def get_accelerate_model(args, checkpoint_dir):
     )
     max_positions = 2**13 # 8k
 
-    if "pythia" in args.model_name_or_path or "gpt-neox" in args.model_args.model_name_or_path:
+    if "pythia" in args.model_name_or_path or "gpt-neox" in args.model_name_or_path:
         # model = BloomForCausalLM.from_pretrained(args.model_name_or_path)
         for each in model.gpt_neox.layers:
             each.attention.rotary_emb = RotaryEmbedding(each.attention.rotary_ndims, max_positions,10000)
@@ -307,12 +307,12 @@ def get_accelerate_model(args, checkpoint_dir):
     elif "bloom" in args.model_name_or_path:
         # model = BloomForCausalLM.from_pretrained(args.model_name_or_path)
         for each in model.transformer.h:
-            each.self_attention = BPTAttentionWrapperWithAlibi(each.self_attention, max_seqlen = max_positions)
+            each.self_attention = BPTAttentionWrapperWithAlibi(each.self_attention)#, max_seqlen = max_positions)
 
     elif "opt" in args.model_name_or_path:
         # model = OPTForCausalLM.from_pretrained(args.model_name_or_path)
         for each in model.model.decoder.layers:
-            each.self_attn = BPTAttentionWrapper(each.self_attn, max_seqlen = max_positions)
+            each.self_attn = BPTAttentionWrapper(each.self_attn)#, max_seqlen = max_positions)
         original_num_embeddings = model.model.decoder.embed_positions.num_embeddings - 2
         assert (max_positions + 2) % original_num_embeddings == 0
         original_embed_positions = model.model.decoder.embed_positions.weight.data
@@ -345,7 +345,7 @@ def get_accelerate_model(args, checkpoint_dir):
             model = PeftModel.from_pretrained(model, join(checkpoint_dir, 'adapter_model'), is_trainable=True)
         else:
             print(f'adding LoRA modules...')
-            modules = find_all_linear_names(args, model)
+            modules = find_all_linear_names(model)
             config = LoraConfig(
                 r=args.lora_r,
                 lora_alpha=args.lora_alpha,
