@@ -674,7 +674,7 @@ def train():
         cache_dir=args.cache_dir,
         padding_side="right",
         use_fast=False, # Fast tokenizer giving issues.
-        tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
+        # tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
     )
     if tokenizer._pad_token is None:
         smart_tokenizer_and_embedding_resize(
