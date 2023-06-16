@@ -223,11 +223,13 @@ class GenerationArguments:
 
 def find_all_linear_names(args, model):
     cls = bnb.nn.Linear4bit if args.bits == 4 else (bnb.nn.Linear8bitLt if args.bits == 8 else torch.nn.Linear)
+    print(">>> Linear class", cls)
     lora_module_names = set()
     for name, module in model.named_modules():
         if isinstance(module, cls):
             names = name.split('.')
             lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+    print(">>> LoRA modules", lora_module_names)
 
 
     if 'lm_head' in lora_module_names: # needed for 16-bit
@@ -294,7 +296,25 @@ def get_accelerate_model(args, checkpoint_dir):
     max_positions = 2**13 # 8k
 
     if "pythia" in args.model_name_or_path or "gpt-neox" in args.model_args.model_name_or_path:
-        model = GPTNeoXForCausalLM.from_pretrained(args.model_name_or_path)
+        model = GPTNeoXForCausalLM.from_pretrained(
+            args.model_name_or_path,
+            cache_dir=args.cache_dir,
+            load_in_4bit=args.bits == 4,
+            load_in_8bit=args.bits == 8,
+            device_map='auto',
+            max_memory=max_memory,
+            quantization_config=BitsAndBytesConfig(
+                load_in_4bit=args.bits == 4,
+                load_in_8bit=args.bits == 8,
+                llm_int8_threshold=6.0,
+                llm_int8_has_fp16_weight=False,
+                bnb_4bit_compute_dtype=compute_dtype,
+                bnb_4bit_use_double_quant=args.double_quant,
+                bnb_4bit_quant_type=args.quant_type
+            ),
+            torch_dtype=(torch.float32 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)),
+            trust_remote_code=args.trust_remote_code,
+        )
         for each in model.gpt_neox.layers:
             each.attention.rotary_emb = RotaryEmbedding(each.attention.rotary_ndims, max_positions,10000)
             each.attention.bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
