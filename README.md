@@ -7,6 +7,9 @@ source ~/venv/long/bin/activate # alias long
 
 pip3 install -r requirements.txt
 
+## Với cuda 12 cần cài torch phù hợp
+#pip3 install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
+
 # python3 qlora.py --model_name_or_path EleutherAI/pythia-70m
 python3 qlora.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
 ```
