@@ -6,9 +6,11 @@ from transformers.models.bloom.modeling_bloom import dropout_add
 from typing import Optional, Tuple
 from einops import rearrange
 import torch.nn.functional as F
+
 # blockwise_compute_attn doesn't seem to be working with the patch
 # defaulting to lucid rains memory efficient implementation since they are the same
 from _bpt_pt import blockwise_compute_ffn, memory_efficient_attention
+
 
 class FeedForwardWrapperNeoX(torch.nn.Module):
     def __init__(self, mlp, chunk_size):
@@ -21,6 +23,7 @@ class FeedForwardWrapperNeoX(torch.nn.Module):
         hidden_states = self.cell.act(hidden_states)
         hidden_states = blockwise_compute_ffn(self.cell.dense_4h_to_h, hidden_states, self.chunk_size)
         return hidden_states
+
 
 class BPTAttentionWrapper(torch.nn.Module):
     def __init__(self, attention, query_chunk_size = 512, key_chunk_size=1024):
@@ -38,32 +41,35 @@ class BPTAttentionWrapper(torch.nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
+
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
-        # if key_value_states are provided this layer is used as a cross-attention layer
-        # for the decoder
+        # if key_value_states are provided this layer is used as a cross-attention layer for the decoder
         is_cross_attention = key_value_states is not None
-
         bsz, tgt_len, _ = hidden_states.size()
 
         # get query proj
         query_states = self.attention.q_proj(hidden_states) * self.attention.scaling
+
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
             # reuse k,v, cross_attentions
             key_states = past_key_value[0]
             value_states = past_key_value[1]
+
         elif is_cross_attention:
             # cross_attentions
             key_states = self.attention._shape(self.attention.k_proj(key_value_states), -1, bsz)
             value_states = self.attention._shape(self.attention.v_proj(key_value_states), -1, bsz)
+
         elif past_key_value is not None:
             # reuse k, v, self_attention
             key_states = self.attention._shape(self.attention.k_proj(hidden_states), -1, bsz)
             value_states = self.attention._shape(self.attention.v_proj(hidden_states), -1, bsz)
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
         else:
             # self_attention
             key_states = self.attention._shape(self.attention.k_proj(hidden_states), -1, bsz)
@@ -94,6 +100,7 @@ class BPTAttentionWrapper(torch.nn.Module):
         attn_output = self.attention.out_proj(attn_output)
 
         return attn_output, attn_weights_reshaped, past_key_value
+
 
 class BPTAttentionWrapperWithRotary(torch.nn.Module):
     def __init__(self, attention, query_chunk_size=512, key_chunk_size=1024):
@@ -169,6 +176,7 @@ class BPTAttentionWrapperWithRotary(torch.nn.Module):
 
         return outputs
     
+
 class BPTAttentionWrapperWithAlibi(torch.nn.Module):
     def __init__(self, attention, query_chunk_size=512, key_chunk_size=1024 ):
         super().__init__()
@@ -210,12 +218,21 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         else:
             present = None
 
-        reshaped_query_layer = query_layer.reshape(batch_size, self.attention.num_heads, query_layer.shape[1], query_layer.shape[2]).permute(0, 2, 1, 3)
-        reshaped_key_layer = key_layer.reshape(batch_size, self.attention.num_heads, key_layer.shape[1], key_layer.shape[2]).permute(0, 3, 1, 2)
-        reshaped_value_layer = value_layer.reshape(batch_size, self.attention.num_heads, value_layer.shape[1], value_layer.shape[2]).permute(0, 2, 1, 3)
-        offset_key_layer = self.attention.inv_norm_factor * reshaped_key_layer + self.attention.beta * (torch.linalg.pinv(reshaped_query_layer.permute(0,2,1,3).float()) * alibi.view(batch_size, alibi.shape[0]//batch_size, alibi.shape[1], alibi.shape[2])).permute(0, 3, 1, 2).half()
+        reshaped_query_layer = query_layer.reshape(
+            batch_size, self.attention.num_heads, query_layer.shape[1], query_layer.shape[2]).permute(0, 2, 1, 3)
 
-        context_layer = memory_efficient_attention(reshaped_query_layer, offset_key_layer, reshaped_value_layer, q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
+        reshaped_key_layer = key_layer.reshape(
+            batch_size, self.attention.num_heads, key_layer.shape[1], key_layer.shape[2]).permute(0, 3, 1, 2)
+
+        reshaped_value_layer = value_layer.reshape(
+            batch_size, self.attention.num_heads, value_layer.shape[1], value_layer.shape[2]).permute(0, 2, 1, 3)
+
+        offset_key_layer = self.attention.inv_norm_factor * reshaped_key_layer + \
+            self.attention.beta * (torch.linalg.pinv(reshaped_query_layer.permute(0,2,1,3).float()) * \
+                alibi.view(batch_size, alibi.shape[0]//batch_size, alibi.shape[1], alibi.shape[2])).permute(0, 3, 1, 2).half()
+
+        context_layer = memory_efficient_attention(reshaped_query_layer, offset_key_layer, reshaped_value_layer, \
+            q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
         context_layer = torch.flatten(context_layer, start_dim = 2)
         
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
