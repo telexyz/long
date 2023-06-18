@@ -161,6 +161,9 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         output_attentions: bool = False,
         ):
         fused_qkv = self.attention.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
+        # print(">>>", hidden_states.dtype, alibi.dtype, attention_mask.dtype); import sys; sys.exit() # DEBUG
+        # print(">>>", hidden_states.shape, alibi.shape, attention_mask.shape); import sys; sys.exit() # DEBUG
+        # print(">>>", residual.shape, residual.dtype); import sys; sys.exit() # DEBUG
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = self.attention._split_heads(fused_qkv)
@@ -226,6 +229,31 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
 
 
 if __name__ == "__main__":
+    ## Test BPTAttentionWrapperWithAlibi
+    from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
+
+    model_path_or_name = "bigscience/bloom-560m"
+    tokenizer = AutoTokenizer.from_pretrained(model_path_or_name)
+    model = AutoModelForCausalLM.from_pretrained(model_path_or_name).cpu()
+
+    attn0 = model.transformer.h[0].self_attention
+    attn1 = BPTAttentionWrapperWithAlibi(attn0)
+
+    print(attn0)
+    # >>> torch.Size([1, 519, 1024]) torch.Size([16, 1, 519]) torch.Size([1, 1, 519, 519]) torch.Size([1, 519, 1024])
+    # >>> torch.float32 torch.float32 torch.bool torch.float32
+    x0 = torch.rand(1, 519, 1024).cpu()#; x.requires_grad = True # đầu vào x
+    x1 = x0.detach().clone().cpu()
+    alibi = torch.rand(16, 1, 519).cpu()
+    attention_mask = torch.rand(1, 1, 519, 519).bool().cpu()
+    residual = torch.rand(1, 519, 1024).cpu()
+    y0 = attn0(x0, residual=residual, alibi=alibi, attention_mask=attention_mask)
+    y1 = attn1(x1, residual=residual, alibi=alibi, attention_mask=attention_mask)
+    print(y0[0] ,"\n", y1[0])
+    result = (y0[0] - y1[0]).sum()
+    print(f"bloom forwared {result}")
+    assert abs(result) < 0.01
+
     ## regular attention
     def attention(
         q, k, v,
@@ -331,3 +359,4 @@ if __name__ == "__main__":
     delta = (x.grad + x1.grad).sum()
     # print(x.grad, "\n", x1.grad, delta)
     assert abs(delta) < 0.01
+
