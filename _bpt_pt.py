@@ -3,18 +3,6 @@ from torch.utils.checkpoint import checkpoint
 import torch.nn as nn 
 from transformers.activations import ACT2FN
 
-class GPTNeoXMLP(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.dense_h_to_4h = nn.Linear(512, 2048)
-        self.dense_4h_to_h = nn.Linear(2048, 512)
-        self.act = ACT2FN["gelu"]
-
-    def forward(self, hidden_states):
-        hidden_states = self.dense_h_to_4h(hidden_states)
-        hidden_states = self.act(hidden_states)
-        hidden_states = self.dense_4h_to_h(hidden_states)
-        return hidden_states
 
 def blockwise_compute_ffn(cell, inputs, chunk_size):
     inputs = torch.split(inputs, chunk_size, dim=-2)
@@ -191,7 +179,21 @@ def memory_efficient_attention(
 
     return torch.cat(out, dim = -2)
 
+
 if __name__ == "__main__":
+    class GPTNeoXMLP(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.dense_h_to_4h = nn.Linear(512, 2048)
+            self.dense_4h_to_h = nn.Linear(2048, 512)
+            self.act = ACT2FN["gelu"]
+
+        def forward(self, hidden_states):
+            hidden_states = self.dense_h_to_4h(hidden_states)
+            hidden_states = self.act(hidden_states)
+            hidden_states = self.dense_4h_to_h(hidden_states)
+            return hidden_states
+
     # Blocked mem stuff
     q = torch.rand(2, 16,  512, 128)
     k = torch.rand(2, 16, 2048, 128)
@@ -201,8 +203,9 @@ if __name__ == "__main__":
     bias = torch.rand(2, 1, 512, 2048) # bias có shape x y i j, với x <= b, y <= h
 
     # Blocked FFN Stuff
-    x = torch.rand(2, 256, 512)
-    cell = GPTNeoXMLP()
+    x = torch.rand(2, 256, 512) # đầu vào x
     y_pt_mem = memory_efficient_attention(q, k, v, attn_bias=bias, q_bucket_size=512, k_bucket_size=512)
-    y_pt_ffn = blockwise_compute_ffn(cell, x, 256)
+    y_pt_ffn = blockwise_compute_ffn(GPTNeoXMLP(), x, 256)
+
+    # Đầu ra qua att và ffn
     print(y_pt_ffn.shape)
