@@ -10,7 +10,11 @@ pip3 install -r requirements.txt
 ## Với cuda 12 cần cài torch phù hợp
 #pip3 install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu121
 
-python3 qlora.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
+## Chạy thử
+python3 test_patch.py
+
+## Huấn luyện thật
+# python3 qlora.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
 
 python3 qlora_bpt_attn.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
 #old_bpt     `0%|        | 2/10000 [04:06<341:09:43, 122.84s/it]`
