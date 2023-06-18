@@ -185,28 +185,49 @@ if __name__ == "__main__":
             return hidden_states
 
     # Blocked mem stuff
-    q = torch.rand(2, 16, 1024, 128)
     k = torch.rand(2, 16, 2048, 128)
     v = torch.rand(2, 16, 2048, 128)
+    bias = torch.rand(2, 1, 512, 2048) # bias có shape x y i j, với x <= b, y <= h
     # weight =  einsum('b h i d, b h j d -> b h i j', q, k)
     # weight = weight + bias
-    bias = torch.rand(2, 1, 1024, 2048) # bias có shape x y i j, với x <= b, y <= h
 
-    # Blocked FFN Stuff
-    x = torch.rand(2, 256, 512) # đầu vào x
-    y_attn = attention(q, k, v, attn_bias=bias)
-
+    ## Test attn
     for bucket_size in [512, 256, 128, 64, 32]:
-        y_pt_mem = memory_efficient_attention(q, k, v, 
+        q = torch.rand(2, 16, 512, 128)
+        q.requires_grad = True
+        y_attn = attention(q, k, v, attn_bias=bias)
+
+        q1 = q.detach().clone(); q1.requires_grad = True
+        y_pt_mem = memory_efficient_attention(q1, k, v, 
             attn_bias=bias, q_bucket_size=512, k_bucket_size=512)
+
+        # Test forward
         result = (y_attn - y_pt_mem).sum()
         print(f"bucket_size {bucket_size}, {result}")
         assert abs(result) < 0.01
 
-    # Đầu ra ffn
+        # Test backward
+        result.backward()
+        delta = (q.grad + q1.grad).sum()
+        if not abs(delta) < 0.015:
+            print(q.grad[0][0], "\n", q1.grad[0][0], delta)
+            assert False
+
+
+    ## Test ffn
+    x = torch.rand(2, 256, 512); x.requires_grad = True # đầu vào x
     fnn = GPTNeoXMLP()
     y_pt_ffn = blockwise_compute_ffn(fnn, x, 256)
-    y_fnn = fnn(x)
+    x1 = x.detach().clone(); x1.requires_grad = True
+    y_fnn = fnn(x1)
+
+    # Test forward
     result = (y_fnn - y_pt_ffn).sum()
+    print(result)
     assert abs(result) < 0.01
-    print(y_pt_ffn.shape)
+
+    # Test backward
+    result.backward()
+    delta = (x.grad + x1.grad).sum()
+    # print(x.grad, "\n", x1.grad, delta)
+    assert abs(delta) < 0.01
