@@ -8,44 +8,11 @@ from functools import partial
 from einops import rearrange
 
 
+
 def blockwise_compute_ffn(cell, inputs, chunk_size):
     inputs = torch.split(inputs, chunk_size, dim=-2)
     outputs = [ cell(inputs[i]) for i in range(len(inputs)) ]
     return torch.concat(outputs, dim=-2)
-
-
-## regular attention
-def attention(
-    q, k, v,
-    mask = None,
-    causal = False,
-    attn_bias = None,
-    **kwargs
-):
-    scale = q.shape[-1] ** -0.5
-    q = q * scale
-
-    sim = einsum('b h i d, b h j d -> b h i j', q, k)
-
-    if attn_bias is not None:
-        sim = sim + attn_bias
-
-    mask_value = -torch.finfo(sim.dtype).max
-
-    if mask is not None:
-        mask = rearrange(mask, 'b j -> b 1 1 j')
-        sim = sim.masked_fill(~mask, mask_value)
-
-    if causal:
-        i, j = sim.shape[-2:]
-        mask = torch.ones(i, j, device = q.device, dtype = torch.bool).triu(j - i + 1)
-        sim = sim.masked_fill(mask, mask_value)
-
-    sim = sim - sim.amax(dim = -1, keepdim = True).detach()
-    attn = sim.softmax(dim = -1)
-
-    out = einsum('b h i j, b h j d -> b h i d', attn, v)
-    return out
 
 
 
@@ -73,7 +40,8 @@ def summarize_qkv_chunk(q, k, v, mask, attn_bias_chunk, causal, qk_start_indices
         weight = weight.masked_fill(~mask, mask_value)
 
     if causal and q_start_index < (k_start_index + k_chunk_size - 1):
-        causal_mask = torch.ones((q_chunk_size, k_chunk_size), dtype = torch.bool, device = device).triu(q_start_index - k_start_index + 1)
+        causal_mask = torch.ones((q_chunk_size, k_chunk_size), dtype = torch.bool, device = device)
+        causal_mask = causal_mask.triu(q_start_index - k_start_index + 1)
         weight = weight.masked_fill(causal_mask, mask_value)
 
     weight_max = weight.amax(dim = -1, keepdim = True).detach()
@@ -174,6 +142,40 @@ def memory_efficient_attention(
 
 
 if __name__ == "__main__":
+    ## regular attention
+    def attention(
+        q, k, v,
+        mask = None,
+        causal = False,
+        attn_bias = None,
+        **kwargs
+    ):
+        scale = q.shape[-1] ** -0.5
+        q = q * scale
+
+        sim = einsum('b h i d, b h j d -> b h i j', q, k)
+
+        if attn_bias is not None:
+            sim = sim + attn_bias
+
+        mask_value = -torch.finfo(sim.dtype).max
+
+        if mask is not None:
+            mask = rearrange(mask, 'b j -> b 1 1 j')
+            sim = sim.masked_fill(~mask, mask_value)
+
+        if causal:
+            i, j = sim.shape[-2:]
+            mask = torch.ones(i, j, device = q.device, dtype = torch.bool).triu(j - i + 1)
+            sim = sim.masked_fill(mask, mask_value)
+
+        sim = sim - sim.amax(dim = -1, keepdim = True).detach()
+        attn = sim.softmax(dim = -1)
+
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        return out
+
+
     from transformers.activations import ACT2FN
     class GPTNeoXMLP(nn.Module):
         def __init__(self):
