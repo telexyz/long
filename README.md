@@ -9,6 +9,7 @@ pip3 install -r requirements.txt
 
 # python3 qlora.py --model_name_or_path EleutherAI/pythia-70m
 python3 qlora.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
+python3 qlora_bpt_attn.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
 ```
 
 TODOS:
