@@ -75,7 +75,10 @@ def attention(
 
 ## memory efficient attention
 def summarize_qkv_chunk(q, k, v, mask, attn_bias_chunk, causal, qk_start_indices, dropout):
-    q_start_index, k_start_index, q_chunk_size, k_chunk_size, device = *qk_start_indices, q.shape[-2], k.shape[-2], q.device
+    # print(">>>", qk_start_indices) # DEBUG
+    # >>> (0, 0)  >>> (0, 512)  >>> (0, 1024)   >>> (0, 1536)
+    q_start_index, k_start_index = qk_start_indices
+    q_chunk_size, k_chunk_size, device = q.shape[-2], k.shape[-2], q.device
 
     weight = einsum('b h i d, b h j d -> b h i j', q, k)
 
@@ -193,13 +196,13 @@ if __name__ == "__main__":
     q = torch.rand(2, 16,  512, 128)
     k = torch.rand(2, 16, 2048, 128)
     v = torch.rand(2, 16, 2048, 128)
-    # <= einsum('b h i d, b h j d -> b h i j', q, k)
-    bias = torch.rand(2, 1, 512, 2048)
+    # weight =  einsum('b h i d, b h j d -> b h i j', q, k)
+    # weight = weight + bias
+    bias = torch.rand(2, 1, 512, 2048) # bias có shape x y i j, với x <= b, y <= h
 
     # Blocked FFN Stuff
     x = torch.rand(2, 256, 512)
     cell = GPTNeoXMLP()
     y_pt_mem = memory_efficient_attention(q, k, v, attn_bias=bias, q_bucket_size=512, k_bucket_size=512)
-    # => RuntimeError: einsum(): subscript h has size 2048 for operand 1 which does not broadcast with previously seen size 512
     y_pt_ffn = blockwise_compute_ffn(cell, x, 256)
     print(y_pt_ffn.shape)
