@@ -78,6 +78,8 @@ def summarize_qkv_chunk(q, k, v, mask, attn_bias_chunk, causal, qk_start_indices
     q_start_index, k_start_index, q_chunk_size, k_chunk_size, device = *qk_start_indices, q.shape[-2], k.shape[-2], q.device
 
     weight = einsum('b h i d, b h j d -> b h i j', q, k)
+    # RuntimeError: einsum(): subscript h has size 2048 for operand 1 which does not broadcast 
+    # with previously seen size 512    
 
     if exists(attn_bias_chunk):
         weight = weight + attn_bias_chunk
@@ -103,7 +105,6 @@ def summarize_qkv_chunk(q, k, v, mask, attn_bias_chunk, causal, qk_start_indices
 
     return exp_weight.sum(dim = -1), weighted_value, rearrange(weight_max, '... 1 -> ...')
 
-checkpointed_summarize_qkv_chunk = partial(checkpoint, summarize_qkv_chunk)
 
 def memory_efficient_attention(
     q, k, v,
@@ -121,6 +122,7 @@ def memory_efficient_attention(
 
     # function
 
+    checkpointed_summarize_qkv_chunk = partial(checkpoint, summarize_qkv_chunk)
     needs_backwards = q.requires_grad or k.requires_grad or v.requires_grad
     summarize_qkv_fn = checkpointed_summarize_qkv_chunk if needs_backwards else summarize_qkv_chunk
 
@@ -198,6 +200,7 @@ if __name__ == "__main__":
     # Blocked FFN Stuff
     x = torch.rand(2, 256, 512)
     cell = GPTNeoXMLP()
-    y_pt_mem = memory_efficient_attention(q, k, v, bias=bias, query_chunk_size=512, key_chunk_size=512)
+    y_pt_mem = memory_efficient_attention(q, k, v, attn_bias=bias)#, q_bucket_size=512, k_bucket_size=512)
+    # => RuntimeError: einsum(): subscript h has size 2048 for operand 1 which does not broadcast with previously seen size 512
     y_pt_ffn = blockwise_compute_ffn(cell, x, 256)
     print(y_pt_ffn.shape)
