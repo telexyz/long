@@ -1,29 +1,20 @@
 import torch
-from transformers.models.gpt_neox.modeling_gpt_neox import apply_rotary_pos_emb
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
-from transformers.models.gpt_neox.modeling_gpt_neox import RotaryEmbedding
-from _bpt_attention_plugin import BPTAttentionWrapperWithRotary, FeedForwardWrapperNeoX
+from bpt import BPTAttentionWrapperWithAlibi
 import os
 
-model_path_or_name = "EleutherAI/pythia-160m"
+model_path_or_name = "bigscience/bloom-560m"
 tokenizer = AutoTokenizer.from_pretrained(model_path_or_name)
 model = AutoModelForCausalLM.from_pretrained(model_path_or_name)
 
 factor = 1
-max_positions = 517 * factor
+max_positions = 600 * factor
 tokenizer.pad_token = tokenizer.mask_token
 model.config.max_position_embeddings=max_positions
 tokenizer.model_max_length = max_positions
 
-for each in model.gpt_neox.layers:
-    original_emb = each.attention.rotary_emb
-    #base = torch.sqrt(1/each.attention.rotary_emb.inv_freq[1]).cpu()
-    each.attention.rotary_emb = RotaryEmbedding(each.attention.rotary_ndims,max_positions,10000)
-    each.attention.bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
-                1, 1, max_positions, max_positions
-            )
-    each.attention = BPTAttentionWrapperWithRotary(each.attention, query_chunk_size=512, key_chunk_size=512)
-    each.mlp = FeedForwardWrapperNeoX(each.mlp, chunk_size=128)
+for each in model.transformer.h:
+    each.self_attention = BPTAttentionWrapperWithAlibi(each.self_attention)
 
 model = model.cuda().eval()
 
@@ -42,10 +33,11 @@ Trump ordered a travel ban on citizens from several Muslim-majority countries, d
 with torch.no_grad():
     inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
     print(inputs.input_ids.shape)
-    # we will use the below hacky util function to pass in the global mask, proper fix comes later, it needs to be a 2D list always, with batch size as the top level and the token index you want to attend to in the next
+    # we will use the below hacky util function to pass in the global mask, 
+    # proper fix comes later, it needs to be a 2D list always, 
+    # with batch size as the top level and the token index you want to attend to in the next
     inputs['repetition_penalty'] = 1.3
     inputs['no_repeat_ngram_size'] = True
-    #inputs['max_length'] = len(inputs[0]) + 512
     tokens = model.generate(**inputs, use_cache = True, max_new_tokens = max_positions)
     outputs = tokenizer.decode(tokens[0])
     print(outputs)

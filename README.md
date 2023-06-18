@@ -17,9 +17,21 @@ python3 test_patch.py
 python3 qlora.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
 #old_bpt     `0%|        | 2/10000 [04:06< 341:09:43, 122.84s/it]`
 #new_memeff  `0%|        | 1/10000 [08:24<1401:24:16, 504.56s/it]`
-  0%|                                                                             | 1/10000 [08:26<1406:57:43, 506.56s/it]
-#no_fft      `0%|        | 1/10000 [08:16<1378:14:46, 496.22s/it]`
-# => Chậm phần lớn ở memory_efficient_attention
+```
+
+Thử nghiệm với nhiều chunk size khác nhau.
+```sh
+# QUERY_CHUNK_SIZE=512
+# KEY_CHUNK_SIZE=1024
+# 0%|                                                                             | 1/10000 [09:10<1528:05:16, 550.17s/it]
+
+# QUERY_CHUNK_SIZE=512
+# KEY_CHUNK_SIZE=512
+# 0%|                                                                             | 1/10000 [08:17<1381:39:29, 497.45s/it]
+
+# QUERY_CHUNK_SIZE=2048
+# KEY_CHUNK_SIZE=2048
+# 0%|                                                                             | 6/10000 [47:14<1293:02:59, 465.78s/it]
 ```
 
 - 560m params model mất 13 ngày để train qlora + BPT cho 10k interations => Quá chậm!
@@ -71,5 +83,3 @@ https://ontocord.slack.com/archives/C053B9FSK0D/p1686872087221869?thread_ts=1686
 > haha, yea I pretty much assumed the python loop would cause a lot of memory issues, I think the jax optimization you were talking about is this? https://jax.readthedocs.io/en/latest/_autosummary/jax.lax.scan.html but unfortunately nothing yet like this for pytorch so for loops were a necessary evil
 
 > Yeah, for torch you have to do some tricks with jitting compile. I will kick these tricks in and hopefully bring back some numbers for further discussion!
-
-

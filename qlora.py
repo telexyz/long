@@ -25,13 +25,10 @@ from transformers import (
     set_seed, 
     Seq2SeqTrainer,
     BitsAndBytesConfig,
-    LlamaTokenizer
 )
 from datasets import load_dataset, Dataset, load_from_disk
 import evaluate
-from transformers.models.gpt_neox.modeling_gpt_neox import RotaryEmbedding
-from _bpt_attention_plugin import BPTAttentionWrapper, BPTAttentionWrapperWithAlibi 
-from _bpt_attention_plugin import FeedForwardWrapperNeoX, BPTAttentionWrapperWithRotary
+from bpt import BPTAttentionWrapperWithAlibi 
 
 from peft import (
     prepare_model_for_kbit_training,
@@ -51,12 +48,12 @@ IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
 QUERY_CHUNK_SIZE=512
 KEY_CHUNK_SIZE=1024
-FFN_CHUNK_SIZE=512
+FFN_CHUNK_SIZE=512 # độc lập với KEY và QUERY CHUNK SIZE
 
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(
-        default="EleutherAI/pythia-12b"
+        default="bigscience/bloom-560m"
     )
     trust_remote_code: Optional[bool] = field(
         default=False,
@@ -289,25 +286,15 @@ def get_accelerate_model(args, checkpoint_dir):
         torch_dtype=(torch.float32 if args.fp16 else (torch.bfloat16 if args.bf16 else torch.float32)),
         trust_remote_code=args.trust_remote_code,
     )
-    max_positions = 2**13 # 8k
+    # max_positions = 2**13 # 8k
 
-    if "pythia" in args.model_name_or_path or "gpt-neox" in args.model_name_or_path:
-        for each in model.gpt_neox.layers:
-            each.attention.rotary_emb = RotaryEmbedding(each.attention.rotary_ndims, max_positions,10000)
-            each.attention.bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
-                        1, 1, max_positions, max_positions
-                    )
-            each.attention = BPTAttentionWrapperWithRotary(each.attention, \
-                query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
-            each.mlp = FeedForwardWrapperNeoX(each.mlp, chunk_size=FFN_CHUNK_SIZE)
-
-    elif "bloom" in args.model_name_or_path:
+    if "bloom" in args.model_name_or_path:
         for each in model.transformer.h:
             each.self_attention = BPTAttentionWrapperWithAlibi(each.self_attention, \
                 query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
-
     else:
         raise NotImplementedError
+
     if compute_dtype == torch.float16 and args.bits == 4:
         major, minor = torch.cuda.get_device_capability()
         if major >= 8:
@@ -663,28 +650,16 @@ def train():
         args.model_name_or_path,
         cache_dir=args.cache_dir,
         padding_side="right",
-        use_fast=True if not 'llama' in args.model_name_or_path else False, # Fast tokenizer giving issues.
-        tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
+        use_fast=True,
     )
+
     if tokenizer._pad_token is None:
         smart_tokenizer_and_embedding_resize(
             special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
             tokenizer=tokenizer,
             model=model,
         )
-    if 'llama' in args.model_name_or_path or isinstance(tokenizer, LlamaTokenizer):
-        # LLaMA tokenizer may not have correct special tokens set.
-        # Check and add them if missing to prevent them from being parsed into different tokens.
-        # Note that these are present in the vocabulary. 
-        # Note also that `model.config.pad_token_id` is 0 which corresponds to `<unk>` token.
-        print('Adding special tokens.')
-        tokenizer.add_special_tokens({
-                "eos_token": tokenizer.convert_ids_to_tokens(model.config.eos_token_id),
-                "bos_token": tokenizer.convert_ids_to_tokens(model.config.bos_token_id),
-                "unk_token": tokenizer.convert_ids_to_tokens(                    
-                    model.config.pad_token_id if model.config.pad_token_id != -1 else tokenizer.pad_token_id
-                ),
-        })
+
     data_module = make_data_module(tokenizer=tokenizer, args=args)
     trainer = Seq2SeqTrainer(
         model=model, 
