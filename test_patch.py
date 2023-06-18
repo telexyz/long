@@ -9,7 +9,6 @@ model = AutoModelForCausalLM.from_pretrained(model_path_or_name)
 
 factor = 1
 max_positions = 600 * factor
-tokenizer.pad_token = tokenizer.mask_token
 model.config.max_position_embeddings=max_positions
 tokenizer.model_max_length = max_positions
 

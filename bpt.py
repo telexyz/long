@@ -165,7 +165,10 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = self.attention._split_heads(fused_qkv)
         batch_size, q_length, _, _ = query_layer.shape
-                
+        # print(">>>", batch_size, q_length)
+        # Inference: >>> 1 519
+        # Training:  >>> 1 316
+
         query_layer = query_layer.transpose(1, 2).reshape(batch_size * self.attention.num_heads, q_length, self.attention.head_dim)
         key_layer = key_layer.permute(0, 2, 3, 1).reshape(batch_size * self.attention.num_heads, self.attention.head_dim, q_length)
         value_layer = value_layer.transpose(1, 2).reshape(batch_size * self.attention.num_heads, q_length, self.attention.head_dim)
@@ -192,10 +195,17 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         reshaped_value_layer = value_layer.reshape(
             batch_size, self.attention.num_heads, value_layer.shape[1], value_layer.shape[2]).permute(0, 2, 1, 3)
 
-        offset_key_layer = self.attention.inv_norm_factor * reshaped_key_layer + \
-            self.attention.beta * (torch.linalg.pinv(reshaped_query_layer.permute(0,2,1,3).float()) * \
-                alibi.view(batch_size, alibi.shape[0]//batch_size, alibi.shape[1], alibi.shape[2])).permute(0, 3, 1, 2).half()
+        _a = self.attention.inv_norm_factor * reshaped_key_layer
+        _b =self.attention.beta * (torch.linalg.pinv(reshaped_query_layer.permute(0,2,1,3).float()) * \
+                alibi.view(batch_size, alibi.shape[0]//batch_size, alibi.shape[1], alibi.shape[2]))
+        _b = _b.permute(0, 3, 1, 2).half()
 
+        # print(">>>", _a.shape, _b.shape)
+        # >>> torch.Size([1, 519, 16, 64]) torch.Size([1, 519, 16, 64])
+        # >>> torch.Size([1, 520, 16, 64]) torch.Size([1, 520, 16, 64])
+        # >>> torch.Size([1, 1039, 16, 64]) torch.Size([1, 520, 16, 64]) <= lỗi khi inference
+
+        offset_key_layer = _a + _b
         context_layer = memory_efficient_attention(reshaped_query_layer, offset_key_layer, reshaped_value_layer, \
             q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
         context_layer = torch.flatten(context_layer, start_dim = 2)
