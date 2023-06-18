@@ -190,12 +190,23 @@ if __name__ == "__main__":
     v = torch.rand(2, 16, 2048, 128)
     # weight =  einsum('b h i d, b h j d -> b h i j', q, k)
     # weight = weight + bias
-    bias = torch.rand(2, 1, 1034, 2048) # bias có shape x y i j, với x <= b, y <= h
+    bias = torch.rand(2, 1, 1024, 2048) # bias có shape x y i j, với x <= b, y <= h
 
     # Blocked FFN Stuff
     x = torch.rand(2, 256, 512) # đầu vào x
-    y_pt_mem = memory_efficient_attention(q, k, v, attn_bias=bias, q_bucket_size=512, k_bucket_size=512)
-    y_pt_ffn = blockwise_compute_ffn(GPTNeoXMLP(), x, 256)
+    y_attn = attention(q, k, v, attn_bias=bias)
 
-    # Đầu ra qua att và ffn
+    for bucket_size in [512, 256, 128, 64, 32]:
+        y_pt_mem = memory_efficient_attention(q, k, v, 
+            attn_bias=bias, q_bucket_size=512, k_bucket_size=512)
+        result = (y_attn - y_pt_mem).sum()
+        print(f"bucket_size {bucket_size}, {result}")
+        assert abs(result) < 0.01
+
+    # Đầu ra ffn
+    fnn = GPTNeoXMLP()
+    y_pt_ffn = blockwise_compute_ffn(fnn, x, 256)
+    y_fnn = fnn(x)
+    result = (y_fnn - y_pt_ffn).sum()
+    assert abs(result) < 0.01
     print(y_pt_ffn.shape)
