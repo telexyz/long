@@ -2,6 +2,7 @@ import torch
 from torch.utils.checkpoint import checkpoint
 import torch.nn as nn 
 from transformers.activations import ACT2FN
+import numpy as np
 
 class GPTNeoXMLP(nn.Module):
     def __init__(self):
