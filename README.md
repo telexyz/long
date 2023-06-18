@@ -37,5 +37,34 @@ TODOS:
 
 > yup it should be, algorithmically it seems to be the exact same and I also tested the diffs between https://github.com/lhao499/blockwise-parallel-transformer/blob/main/bpt/blocks/blockwise_parallel.py and https://github.com/lhao499/blockwise-parallel-transformer/blob/main/bpt/blocks/memeff.py and they evaluated to the same.
 
+- - -
 
-yup it should be, algorithmically it seems to be the exact same and I also tested the diffs between https://github.com/lhao499/blockwise-parallel-transformer/blob/main/bpt/blocks/blockwise_parallel.py and https://github.com/lhao499/blockwise-parallel-transformer/blob/main/bpt/blocks/memeff.py and they evaluated to the same.
+
+https://ontocord.slack.com/archives/C053B9FSK0D/p1686794722960569
+> Why’s torch2.0 a dependency a bad thing? Is there anything in the infra that’s currently tied to torch < 2.0? Torch2.0 actually does a good job at fusion, and their benchmarking results look pretty decent. Also, PyTorch 2 has nvgraph as its default fusion engine, so lots of the efficiency coming from kernel launching can get removed.
+> I’m not sure if CUDA can do any magic to sequential. Sequential is kind of an inherent thing to the network / algorithm itself. Lower-level languages like CUDA / Triton can get memory tiling / fusion better. However, if the bottleneck is purely due to the sequential, then I am not confident how much CUDA / Triton can bring to the table. **Or, is it the case that by rewriting the kernels in CUDA / Triton, we can change its sequential part to parallel?** That part I’m missing. I could be missing the big picture here and any directions are welcome!
+
+> If I'm not mistaken Longformer has a kernel for sliding windows which is more efficient than regular looping, I'm really just hoping for some speed improvements with looping and attention calculation. If we could also get lower memory overhead to use larger chunk sizes that would be an extra bonus. But if this can't work I think it's possible to use any efficient attention mechanism in place of this.. **the real novelty of the paper is blockwise ffn calculation**. I'm not very experienced with CUDA/Triton and how they work and what they can do so I'll leave that decision up to you
+
+> It could be possible to simply replace memory efficient attention with Flash Attention + block the feed forward + QLoRa and get same if not longer results as BPT
+
+- - -
+
+https://ontocord.slack.com/archives/C053B9FSK0D/p1686872087221869?thread_ts=1686794722.960569&cid=C053B9FSK0D
+
+- I will start by profiling the attention part based on https://github.com/arnavdantuluri/long-context-transformers, and get some sense of where the overhead is spent.
+
+- Based on the profiling results, I’m likely first going to try to fix it by auto-fusion through nvGraph w/ jax / torch. Hopefully fusion can make BPT work!
+
+- If nvGraph is not cutting it, I will proceed with surgery at lower-level, Triton / CUDA level (these two are the same abstraction level, Triton is more research-ish), and see if these tricks can work.
+
+
+> I think this part is likely where it gets the most slowdowns: https://github.com/arnavdantuluri/long-context-transformers/blob/41558f56b5f884dd0c3c33bca8af6770b0b2ff2d/Mem_helpers/BPT/bpt_pt.py#L192.
+> A for loop in python incurs way too many overheads around inner kernels (tensors gets transferred, control gets handed over to host land, and host start the next iteration over PCIe). Compilers like JAX also don’t have visibility over pure python for loop, which makes hard for JAX to run optimization.
+> In JAX, there’s a device-level loop (I need to search for it a bit… I believe it is something like this: https://jax.readthedocs.io/en/latest/_autosummary/jax.lax.while_loop.html#jax.lax.while_loop). If you write your loop like this, the loop is recognized by JAX as an optimizable, none-python loop, and JAX can do loop-level pipelining and scheduling for you automatically on the device side (instead of pushing everything to host). (edited) 
+
+> haha, yea I pretty much assumed the python loop would cause a lot of memory issues, I think the jax optimization you were talking about is this? https://jax.readthedocs.io/en/latest/_autosummary/jax.lax.scan.html but unfortunately nothing yet like this for pytorch so for loops were a necessary evil
+
+> Yeah, for torch you have to do some tricks with jitting compile. I will kick these tricks in and hopefully bring back some numbers for further discussion!
+
+
