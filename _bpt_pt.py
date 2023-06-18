@@ -101,11 +101,6 @@ def memory_efficient_attention(
     scale = q.shape[-1] ** -0.5
     q = q * scale
 
-    # function
-    requires_grad = q.requires_grad or k.requires_grad or v.requires_grad
-    summarize_qkv_fn = partial(checkpoint, summarize_qkv_chunk) if requires_grad else summarize_qkv_chunk
-    # https://pytorch.org/docs/stable/checkpoint.html
-
     # chunk all the inputs
     q_chunks = q.split(q_bucket_size, dim = -2)
     k_chunks = k.split(k_bucket_size, dim = -2)
@@ -137,12 +132,21 @@ def memory_efficient_attention(
             if attn_bias is not None:   attn_bias_chunk = attn_bias_chunks[q_index][k_index]
             else:                       attn_bias_chunk = None
 
-            exp_weight_chunk, weighted_value_chunk, weight_max_chunk = summarize_qkv_fn(
-                q_chunk, k_chunk, v_chunk,
-                mask_chunk, attn_bias_chunk, causal,
-                (q_start_index, k_start_index),
-                dropout if training else 0.
-            )
+            if q.requires_grad or k.requires_grad or v.requires_grad:
+                # https://pytorch.org/docs/stable/checkpoint.html
+                exp_weight_chunk, weighted_value_chunk, weight_max_chunk = checkpoint(summarize_qkv_chunk,
+                    q_chunk, k_chunk, v_chunk,
+                    mask_chunk, attn_bias_chunk, causal,
+                    (q_start_index, k_start_index),
+                    dropout if training else 0.
+                )
+            else:
+                exp_weight_chunk, weighted_value_chunk, weight_max_chunk = summarize_qkv_chunk(
+                    q_chunk, k_chunk, v_chunk,
+                    mask_chunk, attn_bias_chunk, causal,
+                    (q_start_index, k_start_index),
+                    dropout if training else 0.
+                )
 
             exp_weights.append(exp_weight_chunk)
             weighted_values.append(weighted_value_chunk)
@@ -192,14 +196,14 @@ if __name__ == "__main__":
     # weight = weight + bias
 
     ## Test attn
-    for bucket_size in [512, 256, 128, 64, 32]:
+    for bucket_size in [512, 256, 128, 64]:
         q = torch.rand(2, 16, 512, 128)
         q.requires_grad = True
         y_attn = attention(q, k, v, attn_bias=bias)
 
         q1 = q.detach().clone(); q1.requires_grad = True
         y_pt_mem = memory_efficient_attention(q1, k, v, 
-            attn_bias=bias, q_bucket_size=512, k_bucket_size=512)
+            attn_bias=bias, q_bucket_size=bucket_size, k_bucket_size=bucket_size)
 
         # Test forward
         result = (y_attn - y_pt_mem).sum()
@@ -212,6 +216,16 @@ if __name__ == "__main__":
         if not abs(delta) < 0.015:
             print(q.grad[0][0], "\n", q1.grad[0][0], delta)
             assert False
+
+    # Test forward no-checkpoint
+    q = torch.rand(2, 16, 512, 128)
+    y_attn = attention(q, k, v, attn_bias=bias)
+    bucket_size = 32
+    y_pt_mem = memory_efficient_attention(q, k, v, 
+        attn_bias=bias, q_bucket_size=bucket_size, k_bucket_size=bucket_size)
+    result = (y_attn - y_pt_mem).sum()
+    print(f"bucket_size {bucket_size}, {result}")
+    assert abs(result) < 0.01
 
 
     ## Test ffn
