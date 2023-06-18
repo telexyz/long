@@ -8,7 +8,7 @@ tokenizer = AutoTokenizer.from_pretrained(model_path_or_name)
 model = AutoModelForCausalLM.from_pretrained(model_path_or_name)
 
 factor = 1
-max_positions = 600 * factor
+max_positions = 64 * factor
 model.config.max_position_embeddings=max_positions
 tokenizer.model_max_length = max_positions
 
@@ -37,6 +37,6 @@ with torch.no_grad():
     # with batch size as the top level and the token index you want to attend to in the next
     inputs['repetition_penalty'] = 1.3
     inputs['no_repeat_ngram_size'] = True
-    tokens = model.generate(**inputs, use_cache = True, max_new_tokens = max_positions)
+    tokens = model.generate(**inputs, max_new_tokens = max_positions, use_cache = False)
     outputs = tokenizer.decode(tokens[0])
     print(outputs)

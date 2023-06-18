@@ -251,7 +251,7 @@ if __name__ == "__main__":
     y1 = attn1(x1, residual=residual, alibi=alibi, attention_mask=attention_mask)
     print(y0[0] ,"\n", y1[0])
     result = (y0[0] - y1[0]).sum()
-    print(f"bloom forwared {result}")
+    print(f"bloom forward {result}")
     assert abs(result) < 0.01
 
     ## regular attention
