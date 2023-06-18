@@ -165,9 +165,6 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = self.attention._split_heads(fused_qkv)
         batch_size, q_length, _, _ = query_layer.shape
-        # print(">>>", batch_size, q_length)
-        # Inference: >>> 1 519
-        # Training:  >>> 1 316
 
         query_layer = query_layer.transpose(1, 2).reshape(batch_size * self.attention.num_heads, q_length, self.attention.head_dim)
         key_layer = key_layer.permute(0, 2, 3, 1).reshape(batch_size * self.attention.num_heads, self.attention.head_dim, q_length)
@@ -204,8 +201,8 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         # >>> torch.Size([1, 519, 16, 64]) torch.Size([1, 519, 16, 64])
         # >>> torch.Size([1, 520, 16, 64]) torch.Size([1, 520, 16, 64])
         # >>> torch.Size([1, 1039, 16, 64]) torch.Size([1, 520, 16, 64]) <= lỗi khi inference
-
         offset_key_layer = _a + _b
+
         context_layer = memory_efficient_attention(reshaped_query_layer, offset_key_layer, reshaped_value_layer, \
             q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
         context_layer = torch.flatten(context_layer, start_dim = 2)
