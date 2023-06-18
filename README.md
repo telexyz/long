@@ -14,11 +14,11 @@ pip3 install -r requirements.txt
 python3 test_patch.py
 
 ## Huấn luyện thật
-# python3 qlora.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
-
-python3 qlora_bpt_attn.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
-#old_bpt     `0%|        | 2/10000 [04:06<341:09:43, 122.84s/it]`
+python3 qlora.py --model_name_or_path bigscience/bloom-560m --bits 4 --per_device_train_batch_size 8
+#old_bpt     `0%|        | 2/10000 [04:06< 341:09:43, 122.84s/it]`
 #new_memeff  `0%|        | 1/10000 [08:24<1401:24:16, 504.56s/it]`
+#no_fft      `0%|        | 1/10000 [08:16<1378:14:46, 496.22s/it]`
+# => Chậm phần lớn ở memory_efficient_attention
 ```
 
 - 560m params model mất 13 ngày để train qlora + BPT cho 10k interations => Quá chậm!

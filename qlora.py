@@ -29,9 +29,7 @@ from transformers import (
 )
 from datasets import load_dataset, Dataset, load_from_disk
 import evaluate
-from transformers import GPTNeoXForCausalLM, BloomForCausalLM, OPTForCausalLM
 from transformers.models.gpt_neox.modeling_gpt_neox import RotaryEmbedding
-from transformers.models.opt.modeling_opt import OPTLearnedPositionalEmbedding
 from _bpt_attention_plugin import BPTAttentionWrapper, BPTAttentionWrapperWithAlibi 
 from _bpt_attention_plugin import FeedForwardWrapperNeoX, BPTAttentionWrapperWithRotary
 
@@ -51,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
-QUERY_CHUNK_SIZE=512
+QUERY_CHUNK_SIZE=1024
 KEY_CHUNK_SIZE=512
 FFN_CHUNK_SIZE=512
 
@@ -299,22 +297,14 @@ def get_accelerate_model(args, checkpoint_dir):
             each.attention.bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
                         1, 1, max_positions, max_positions
                     )
-            each.attention = BPTAttentionWrapperWithRotary(each.attention, query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
+            each.attention = BPTAttentionWrapperWithRotary(each.attention, \
+                query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
             each.mlp = FeedForwardWrapperNeoX(each.mlp, chunk_size=FFN_CHUNK_SIZE)
 
     elif "bloom" in args.model_name_or_path:
         for each in model.transformer.h:
-            each.self_attention = BPTAttentionWrapperWithAlibi(each.self_attention, query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
-
-    elif "opt" in args.model_name_or_path:
-        for each in model.model.decoder.layers:
-            each.self_attn = BPTAttentionWrapper(each.self_attn, query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
-        original_num_embeddings = model.model.decoder.embed_positions.num_embeddings - 2
-        assert (max_positions + 2) % original_num_embeddings == 0
-        original_embed_positions = model.model.decoder.embed_positions.weight.data
-        duplicated_embed_positions =  torch.cat([original_embed_positions[:-2] * i for i in range(1, (max_positions + 2) // original_num_embeddings + 1)] +  [original_embed_positions[-2:]], dim = 0)
-        model.model.decoder.embed_positions = OPTLearnedPositionalEmbedding((max_positions + 2), model.model.decoder.embed_positions.embedding_dim)
-        model.model.decoder.embed_positions.weight.data = duplicated_embed_positions
+            each.self_attention = BPTAttentionWrapperWithAlibi(each.self_attention, \
+                query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
 
     else:
         raise NotImplementedError

@@ -10,6 +10,7 @@ from einops import rearrange
 
 
 def blockwise_compute_ffn(cell, inputs, chunk_size):
+    return cell(inputs)
     inputs = torch.split(inputs, chunk_size, dim=-2)
     outputs = [ cell(inputs[i]) for i in range(len(inputs)) ]
     return torch.concat(outputs, dim=-2)
@@ -97,8 +98,8 @@ def memory_efficient_attention(
                 # if chunk is to be all masked out causally, skip
                 continue
 
-            if attn_bias is not None:   attn_bias_chunk = attn_bias_chunks[q_index][k_index]
-            else:                       attn_bias_chunk = None
+            if attn_bias is None: attn_bias_chunk = None
+            else:                 attn_bias_chunk = attn_bias_chunks[q_index][k_index]
 
             if q.requires_grad or k.requires_grad or v.requires_grad:
                 # https://pytorch.org/docs/stable/checkpoint.html
