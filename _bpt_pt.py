@@ -1,30 +1,17 @@
 import torch
+import torch.nn.functional as F
+
+from torch import nn, einsum
 from torch.utils.checkpoint import checkpoint
-import torch.nn as nn 
-from transformers.activations import ACT2FN
+
+from functools import partial
+from einops import rearrange
 
 
 def blockwise_compute_ffn(cell, inputs, chunk_size):
     inputs = torch.split(inputs, chunk_size, dim=-2)
     outputs = [ cell(inputs[i]) for i in range(len(inputs)) ]
     return torch.concat(outputs, dim=-2)
-
-
-import torch
-from functools import partial
-from torch import nn, einsum
-from torch.utils.checkpoint import checkpoint
-import torch.nn.functional as F
-
-from einops import rearrange
-
-# helper functions
-
-def exists(val):
-    return val is not None
-
-def default(val, d):
-    return val if exists(val) else d
 
 
 ## regular attention
@@ -40,12 +27,12 @@ def attention(
 
     sim = einsum('b h i d, b h j d -> b h i j', q, k)
 
-    if exists(attn_bias):
+    if attn_bias is not None:
         sim = sim + attn_bias
 
     mask_value = -torch.finfo(sim.dtype).max
 
-    if exists(mask):
+    if mask is not None:
         mask = rearrange(mask, 'b j -> b 1 1 j')
         sim = sim.masked_fill(~mask, mask_value)
 
@@ -61,24 +48,27 @@ def attention(
     return out
 
 
+
 ## memory efficient attention
 def summarize_qkv_chunk(q, k, v, mask, attn_bias_chunk, causal, qk_start_indices, dropout):
+    q_start_index, k_start_index = qk_start_indices
+    q_chunk_size, k_chunk_size, device = q.shape[-2], k.shape[-2], q.device
+
     # print(">>>", qk_start_indices) # DEBUG
     # >>> (  0, 0) >>> (  0, 512) >>> (  0, 1024) >>> (  0, 1536)
     # >>> (512, 0) >>> (512, 512) >>> (512, 1024) >>> (512, 1536)
     # => q, k được chia thành các block 512 x 512
-
-    q_start_index, k_start_index = qk_start_indices
-    q_chunk_size, k_chunk_size, device = q.shape[-2], k.shape[-2], q.device
+    # print(">>>", q_chunk_size, k_chunk_size) # DEBUG
+    # >>> 512, 512
 
     weight = einsum('b h i d, b h j d -> b h i j', q, k)
 
-    if exists(attn_bias_chunk):
+    if attn_bias_chunk is not None:
         weight = weight + attn_bias_chunk
 
     mask_value = -torch.finfo(weight.dtype).max
 
-    if exists(mask):
+    if mask is not None:
         mask = rearrange(mask, 'b j -> b 1 1 j')
         weight = weight.masked_fill(~mask, mask_value)
 
@@ -96,6 +86,7 @@ def summarize_qkv_chunk(q, k, v, mask, attn_bias_chunk, causal, qk_start_indices
     return exp_weight.sum(dim = -1), weighted_value, rearrange(weight_max, '... 1 -> ...')
 
 
+
 def memory_efficient_attention(
     q, k, v,
     mask = None,
@@ -111,25 +102,24 @@ def memory_efficient_attention(
     q = q * scale
 
     # function
-
-    checkpointed_summarize_qkv_chunk = partial(checkpoint, summarize_qkv_chunk)
-    needs_backwards = q.requires_grad or k.requires_grad or v.requires_grad
-    summarize_qkv_fn = checkpointed_summarize_qkv_chunk if needs_backwards else summarize_qkv_chunk
+    requires_grad = q.requires_grad or k.requires_grad or v.requires_grad
+    summarize_qkv_fn = partial(checkpoint, summarize_qkv_chunk) if requires_grad else summarize_qkv_chunk
+    # https://pytorch.org/docs/stable/checkpoint.html
 
     # chunk all the inputs
-
     q_chunks = q.split(q_bucket_size, dim = -2)
     k_chunks = k.split(k_bucket_size, dim = -2)
     v_chunks = v.split(k_bucket_size, dim = -2)
-    mask_chunks = mask.split(k_bucket_size, dim = -1) if exists(mask) else ((None,) * len(k_chunks))
 
-    if exists(attn_bias):
+    if mask is not None:    mask_chunks = mask.split(k_bucket_size, dim = -1)
+    else:                   mask_chunks = ((None,) * len(k_chunks))
+
+    if attn_bias is not None:
         i, j = attn_bias.shape[-2:]
         attn_bias_chunks = attn_bias.split(q_bucket_size, dim = -2)
         attn_bias_chunks = list(map(lambda t: t.split(k_bucket_size, dim = -1), attn_bias_chunks))
 
     # loop through all chunks and accumulate
-
     out = []
     for q_index, q_chunk in enumerate(q_chunks):
         exp_weights = []
@@ -144,15 +134,12 @@ def memory_efficient_attention(
                 # if chunk is to be all masked out causally, skip
                 continue
 
-            attn_bias_chunk = attn_bias_chunks[q_index][k_index] if exists(attn_bias) else None
+            if attn_bias is not None:   attn_bias_chunk = attn_bias_chunks[q_index][k_index]
+            else:                       attn_bias_chunk = None
 
             exp_weight_chunk, weighted_value_chunk, weight_max_chunk = summarize_qkv_fn(
-                q_chunk,
-                k_chunk,
-                v_chunk,
-                mask_chunk,
-                attn_bias_chunk,
-                causal,
+                q_chunk, k_chunk, v_chunk,
+                mask_chunk, attn_bias_chunk, causal,
                 (q_start_index, k_start_index),
                 dropout if training else 0.
             )
@@ -181,7 +168,9 @@ def memory_efficient_attention(
     return torch.cat(out, dim = -2)
 
 
+
 if __name__ == "__main__":
+    from transformers.activations import ACT2FN
     class GPTNeoXMLP(nn.Module):
         def __init__(self):
             super().__init__()
