@@ -39,7 +39,10 @@ Thử nghiệm với nhiều chunk size khác nhau.
 
 TODOS:
 - [ ] Speedup [Blockwise Parallel Transformer](https://arxiv.org/abs/2305.19370) (BPT) bằng Triton hoặc CUDA
-
+- [ ] https://pytorch.org/docs/master/generated/torch.nn.functional.scaled_dot_product_attention.html
+  - All implementations are enabled by default. Scaled dot product attention attempts to automatically select the most optimal implementation based on the inputs. In order to provide more fine-grained control over what implementation is used, the following functions are provided for enabling and disabling implementations. The context manager is the preferred mechanism:
+    - `torch.backends.cuda.enable_flash_sdp(bool)`: Enables or Disables FlashAttention.
+    - `torch.backends.cuda.enable_mem_efficient_sdp(bool)`: Enables or Disables Memory-Efficient Attention.
 
 - - -
 
