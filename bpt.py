@@ -158,7 +158,7 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = self.attention._split_heads(fused_qkv)
         batch_size, q_length, _, _ = query_layer.shape
-                
+
         query_layer = query_layer.transpose(1, 2).reshape(batch_size * self.attention.num_heads, q_length, self.attention.head_dim)
         key_layer = key_layer.permute(0, 2, 3, 1).reshape(batch_size * self.attention.num_heads, self.attention.head_dim, q_length)
         value_layer = value_layer.transpose(1, 2).reshape(batch_size * self.attention.num_heads, q_length, self.attention.head_dim)
@@ -171,17 +171,28 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
             key_layer = torch.cat((past_key, key_layer), dim=2)
             value_layer = torch.cat((past_value, value_layer), dim=1)
 
-        if use_cache is True:
-            present = (key_layer, value_layer)
-        else:
-            present = None
+        present = None
+        if use_cache is True: present = (key_layer, value_layer)
 
-        reshaped_query_layer = query_layer.reshape(batch_size, self.attention.num_heads, query_layer.shape[1], query_layer.shape[2]).permute(0, 2, 1, 3)
-        reshaped_key_layer = key_layer.reshape(batch_size, self.attention.num_heads, key_layer.shape[1], key_layer.shape[2]).permute(0, 3, 1, 2)
-        reshaped_value_layer = value_layer.reshape(batch_size, self.attention.num_heads, value_layer.shape[1], value_layer.shape[2]).permute(0, 2, 1, 3)
-        offset_key_layer = self.attention.inv_norm_factor * reshaped_key_layer + self.attention.beta * (torch.linalg.pinv(reshaped_query_layer.permute(0,2,1,3).float()) * alibi.view(batch_size, alibi.shape[0]//batch_size, alibi.shape[1], alibi.shape[2])).permute(0, 3, 1, 2).half()
+        reshaped_query_layer = query_layer.reshape(
+            batch_size, self.attention.num_heads, query_layer.shape[1], query_layer.shape[2]).permute(0,2,1,3)
 
-        context_layer = memory_efficient_attention(reshaped_query_layer, offset_key_layer, reshaped_value_layer, q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
+        reshaped_key_layer = key_layer.reshape(
+            batch_size, self.attention.num_heads, key_layer.shape[1], key_layer.shape[2]).permute(0,3,1,2)
+
+        reshaped_value_layer = value_layer.reshape(
+            batch_size, self.attention.num_heads, value_layer.shape[1], value_layer.shape[2]).permute(0,2,1,3)
+
+        _a = self.attention.inv_norm_factor * reshaped_key_layer
+        _b = torch.linalg.pinv(reshaped_query_layer.permute(0,2,1,3).float()) * \
+            alibi.view(batch_size, alibi.shape[0]//batch_size, alibi.shape[1], alibi.shape[2])
+        _b = _b.permute(0,3,1,2).half()
+
+        offset_key_layer = _a + self.attention.beta * _b
+
+        context_layer = memory_efficient_attention(reshaped_query_layer, offset_key_layer, reshaped_value_layer, \
+            q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
+
         context_layer = torch.flatten(context_layer, start_dim = 2)
         
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
@@ -198,8 +209,7 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
 
         output_tensor = dropout_add(output_tensor, residual, self.attention.hidden_dropout, self.attention.training)
 
-        outputs = (output_tensor, present)
-        return outputs
+        return (output_tensor, present)
 
 
 if __name__ == "__main__":
@@ -328,8 +338,8 @@ if __name__ == "__main__":
     alibi = torch.rand(16, 1, 519).cpu()
     attention_mask = torch.rand(1, 1, 519, 519).bool().cpu()
     residual = torch.rand(1, 519, 1024).cpu()
-    y0 = attn0(x0, residual=residual, alibi=alibi, attention_mask=attention_mask)
-    y1 = attn1(x1, residual=residual, alibi=alibi, attention_mask=attention_mask)
+    y0 = attn0(x0, residual=residual, alibi=alibi, attention_mask=attention_mask, use_cache = False)
+    y1 = attn1(x1, residual=residual, alibi=alibi, attention_mask=attention_mask, use_cache = False)
     print(y0[0] ,"\n", y1[0])
     result = (y0[0] - y1[0]).sum()
     print(f"bloom forward {result}")
