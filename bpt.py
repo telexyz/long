@@ -20,13 +20,6 @@ def summarize_qkv_chunk(q, k, v, mask, attn_bias_chunk, causal, qk_start_indices
     q_start_index, k_start_index = qk_start_indices
     q_chunk_size, k_chunk_size, device = q.shape[-2], k.shape[-2], q.device
 
-    # print(">>>", qk_start_indices) # DEBUG
-    # >>> (  0, 0) >>> (  0, 512) >>> (  0, 1024) >>> (  0, 1536)
-    # >>> (512, 0) >>> (512, 512) >>> (512, 1024) >>> (512, 1536)
-    # => q, k được chia thành các block 512 x 512
-    # print(">>>", q_chunk_size, k_chunk_size) # DEBUG
-    # >>> 512, 512
-
     weight = einsum('b h i d, b h j d -> b h i j', q, k)
 
     if attn_bias_chunk is not None:
@@ -161,14 +154,11 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         output_attentions: bool = False,
         ):
         fused_qkv = self.attention.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
-        # print(">>>", hidden_states.dtype, alibi.dtype, attention_mask.dtype); import sys; sys.exit() # DEBUG
-        # print(">>>", hidden_states.shape, alibi.shape, attention_mask.shape); import sys; sys.exit() # DEBUG
-        # print(">>>", residual.shape, residual.dtype); import sys; sys.exit() # DEBUG
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = self.attention._split_heads(fused_qkv)
         batch_size, q_length, _, _ = query_layer.shape
-
+                
         query_layer = query_layer.transpose(1, 2).reshape(batch_size * self.attention.num_heads, q_length, self.attention.head_dim)
         key_layer = key_layer.permute(0, 2, 3, 1).reshape(batch_size * self.attention.num_heads, self.attention.head_dim, q_length)
         value_layer = value_layer.transpose(1, 2).reshape(batch_size * self.attention.num_heads, q_length, self.attention.head_dim)
@@ -186,28 +176,12 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         else:
             present = None
 
-        reshaped_query_layer = query_layer.reshape(
-            batch_size, self.attention.num_heads, query_layer.shape[1], query_layer.shape[2]).permute(0, 2, 1, 3)
+        reshaped_query_layer = query_layer.reshape(batch_size, self.attention.num_heads, query_layer.shape[1], query_layer.shape[2]).permute(0, 2, 1, 3)
+        reshaped_key_layer = key_layer.reshape(batch_size, self.attention.num_heads, key_layer.shape[1], key_layer.shape[2]).permute(0, 3, 1, 2)
+        reshaped_value_layer = value_layer.reshape(batch_size, self.attention.num_heads, value_layer.shape[1], value_layer.shape[2]).permute(0, 2, 1, 3)
+        offset_key_layer = self.attention.inv_norm_factor * reshaped_key_layer + self.attention.beta * (torch.linalg.pinv(reshaped_query_layer.permute(0,2,1,3).float()) * alibi.view(batch_size, alibi.shape[0]//batch_size, alibi.shape[1], alibi.shape[2])).permute(0, 3, 1, 2).half()
 
-        reshaped_key_layer = key_layer.reshape(
-            batch_size, self.attention.num_heads, key_layer.shape[1], key_layer.shape[2]).permute(0, 3, 1, 2)
-
-        reshaped_value_layer = value_layer.reshape(
-            batch_size, self.attention.num_heads, value_layer.shape[1], value_layer.shape[2]).permute(0, 2, 1, 3)
-
-        _a = self.attention.inv_norm_factor * reshaped_key_layer
-        _b =self.attention.beta * (torch.linalg.pinv(reshaped_query_layer.permute(0,2,1,3).float()) * \
-                alibi.view(batch_size, alibi.shape[0]//batch_size, alibi.shape[1], alibi.shape[2]))
-        _b = _b.permute(0, 3, 1, 2).half()
-
-        # print(">>>", _a.shape, _b.shape)
-        # >>> torch.Size([1, 519, 16, 64]) torch.Size([1, 519, 16, 64])
-        # >>> torch.Size([1, 520, 16, 64]) torch.Size([1, 520, 16, 64])
-        # >>> torch.Size([1, 1039, 16, 64]) torch.Size([1, 520, 16, 64]) <= lỗi khi inference
-        offset_key_layer = _a + _b
-
-        context_layer = memory_efficient_attention(reshaped_query_layer, offset_key_layer, reshaped_value_layer, \
-            q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
+        context_layer = memory_efficient_attention(reshaped_query_layer, offset_key_layer, reshaped_value_layer, q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
         context_layer = torch.flatten(context_layer, start_dim = 2)
         
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
